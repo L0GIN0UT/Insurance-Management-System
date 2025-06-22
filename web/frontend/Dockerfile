@@ -1,29 +1,34 @@
 # Build stage
-FROM node:18-alpine as build
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
+# Copy workspace root files
 COPY package*.json ./
-RUN npm install --omit=dev
 
-# Copy source code
-COPY . .
+# Copy frontend package.json (только этот файл существует)
+COPY frontend/package.json ./frontend/
 
-# Build the application
+# Install all workspace dependencies
+RUN npm install
+
+# Copy frontend source code
+COPY frontend/ ./frontend/
+
+# Build the frontend
+WORKDIR /app/frontend
 RUN npm run build
 
 # Production stage
 FROM nginx:alpine
 
-# Copy build files
-COPY --from=build /app/build /usr/share/nginx/html
+# Copy build output to nginx
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 # Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY web/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port
-EXPOSE 3000
+# Expose port 80 (standard nginx port)
+EXPOSE 80
 
-# Start nginx
 CMD ["nginx", "-g", "daemon off;"] 

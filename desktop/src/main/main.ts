@@ -1,54 +1,57 @@
-import { app, BrowserWindow, Menu } from 'electron';
-import * as path from 'path';
+import { app, BrowserWindow, Menu, shell } from 'electron';
+import { join } from 'node:path';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
-let mainWindow: BrowserWindow;
+const isDev = !app.isPackaged;
 
-const createWindow = async (): Promise<void> => {
+function createWindow(): void {
   // Create the browser window.
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
+    width: 1280,
     height: 800,
-    width: 1200,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true
     },
-    icon: path.join(__dirname, '../public/icon.png'),
+    icon: join(__dirname, '../public/icon.png'),
     title: 'Insurance Management System',
     show: false, // Don't show until ready-to-show
   });
 
-  // Load the index.html of the app.
-  console.log('NODE_ENV:', process.env.NODE_ENV);
+  // Load the appropriate content based on environment
+  const DEV_URL = 'http://localhost:3000';
+  const PROD_URL = `file://${join(__dirname, '../renderer/index.html')}`;
+
+  const urlToLoad = isDev ? DEV_URL : PROD_URL;
+  console.log('[MAIN] load', urlToLoad);
   
-  // Пробуем загрузить dev server, если не получается - загружаем файл
-  try {
-    console.log('Trying to load dev server...');
-    await mainWindow.loadURL('http://localhost:9000');
-    console.log('Dev server loaded successfully');
-  } catch (error) {
-    console.log('Dev server failed, loading file:', error);
-    mainWindow.loadFile(path.join(__dirname, 'index.html'));
-  }
+  win.loadURL(urlToLoad).catch((err) => {
+    console.error('[MAIN] load failed, fallback → PROD file', err);
+    if (isDev) win.loadURL(PROD_URL);
+  });
 
   // Show window when ready to prevent visual flash
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+  win.once('ready-to-show', () => {
+    win.show();
   });
 
   // Open the DevTools in development
-  // if (process.env.NODE_ENV === 'development') {
-  //   mainWindow.webContents.openDevTools();
-  // }
+  if (isDev) {
+    win.webContents.openDevTools();
+  }
 
-  // Create application menu
-  createMenu();
-};
+  // Безопасный обработчик внешних ссылок
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+}
 
 const createMenu = (): void => {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -94,16 +97,14 @@ const createMenu = (): void => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.on('ready', () => {
-  createWindow();
+app.whenReady().then(createWindow);
 
-  app.on('activate', () => {
-    // On OS X it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
+app.on('activate', () => {
+  // On OS X it's common to re-create a window in the app when the
+  // dock icon is clicked and there are no other windows open.
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
 });
 
 // Quit when all windows are closed, except on macOS. There, it's common
@@ -117,8 +118,8 @@ app.on('window-all-closed', () => {
 
 // Security: Prevent new window creation
 app.on('web-contents-created', (event, contents) => {
-  contents.on('new-window', (navigationEvent, navigationUrl) => {
-    navigationEvent.preventDefault();
+  contents.setWindowOpenHandler(() => {
+    return { action: 'deny' };
   });
 });
 
