@@ -4,7 +4,7 @@ from fastapi.security import HTTPBearer
 import uvicorn
 
 from app.core.config import get_settings
-from app.routers import contracts, claims, clients, analytics, users
+from app.routers import contracts, claims, clients, analytics, users, products
 from app.utils.auth import verify_token
 from app.db.database import create_tables
 
@@ -38,6 +38,7 @@ app.include_router(claims.router, prefix="/api/v1/claims", tags=["claims"])
 app.include_router(clients.router, prefix="/api/v1/clients", tags=["clients"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(products.router, prefix="/api/v1/products", tags=["products"])
 
 @app.get("/")
 async def root():

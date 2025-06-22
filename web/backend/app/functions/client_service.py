@@ -12,10 +12,15 @@ class ClientService:
 
     def create_client(self, client_data: ClientCreate, created_by: int) -> Client:
         """Create a new client"""
+        client_dict = client_data.dict()
+        
+        # Generate identification_number if not provided
+        if not client_dict.get('identification_number'):
+            client_dict['identification_number'] = self.generate_client_id()
+        
         client = Client(
-            **client_data.dict(),
-            created_by=created_by,
-            identification_number=self.generate_client_id()
+            **client_dict,
+            created_by=created_by
         )
         self.db.add(client)
         self.db.commit()
