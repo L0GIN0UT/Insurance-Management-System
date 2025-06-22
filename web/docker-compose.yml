@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  auth-db:
+    image: postgres:15
+    container_name: insurance_auth_db
+    environment:
+      POSTGRES_DB: ${AUTH_DB_NAME}
+      POSTGRES_USER: ${AUTH_DB_USER}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth_data:/var/lib/postgresql/data
+    networks:
+      - insurance_network
+
+  main-db:
+    image: postgres:15
+    container_name: insurance_main_db
+    environment:
+      POSTGRES_DB: ${MAIN_DB_NAME}
+      POSTGRES_USER: ${MAIN_DB_USER}
+      POSTGRES_PASSWORD: ${MAIN_DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - main_data:/var/lib/postgresql/data
+    networks:
+      - insurance_network
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: insurance_auth
+    environment:
+      AUTH_DB_NAME: ${AUTH_DB_NAME}
+      AUTH_DB_USER: ${AUTH_DB_USER}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      AUTH_DB_HOST: auth-db
+      AUTH_DB_PORT: 5432
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+    ports:
+      - "${AUTH_SERVICE_PORT}:8001"
+    depends_on:
+      - auth-db
+    networks:
+      - insurance_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: insurance_backend
+    environment:
+      MAIN_DB_NAME: ${MAIN_DB_NAME}
+      MAIN_DB_USER: ${MAIN_DB_USER}
+      MAIN_DB_PASSWORD: ${MAIN_DB_PASSWORD}
+      MAIN_DB_HOST: main-db
+      MAIN_DB_PORT: 5432
+      AUTH_SERVICE_URL: http://auth-service:8001
+    ports:
+      - "${BACKEND_PORT}:8000"
+    depends_on:
+      - main-db
+      - auth-service
+    networks:
+      - insurance_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: insurance_frontend
+    environment:
+      REACT_APP_BACKEND_URL: http://localhost:${BACKEND_PORT}
+      REACT_APP_AUTH_URL: http://localhost:${AUTH_SERVICE_PORT}
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    depends_on:
+      - backend
+      - auth-service
+    networks:
+      - insurance_network
+
+volumes:
+  auth_data:
+  main_data:
+
+networks:
+  insurance_network:
+    driver: bridge 

@@ -1,0 +1,87 @@
+{
+  "name": "insurance-desktop",
+  "version": "1.0.0",
+  "description": "Insurance Management System Desktop Application",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "npm run dev:main && concurrently \"npm run dev:renderer\" \"cross-env NODE_ENV=development npm run start\"",
+    "dev:main": "webpack --config webpack.main.config.js --mode development",
+    "dev:renderer": "webpack serve --config webpack.renderer.config.js --mode development",
+    "electron": "electron .",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "webpack --config webpack.main.config.js --mode production",
+    "build:renderer": "webpack --config webpack.renderer.config.js --mode production",
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "keywords": [
+    "insurance",
+    "electron",
+    "react",
+    "typescript"
+  ],
+  "author": "Insurance Management System",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/react": "^18.0.15",
+    "@types/react-dom": "^18.0.6",
+    "@typescript-eslint/eslint-plugin": "^5.30.0",
+    "@typescript-eslint/parser": "^5.30.0",
+    "@babel/core": "^7.18.0",
+    "@babel/preset-react": "^7.18.0",
+    "babel-loader": "^8.2.5",
+    "concurrently": "^7.2.2",
+    "cross-env": "^7.0.3",
+    "css-loader": "^6.7.1",
+    "electron": "^19.0.0",
+    "electron-builder": "^23.1.0",
+    "html-webpack-plugin": "^5.5.0",
+    "style-loader": "^3.3.1",
+    "ts-loader": "^9.3.1",
+    "typescript": "^4.7.4",
+    "wait-on": "^6.0.1",
+    "webpack": "^5.73.0",
+    "webpack-cli": "^4.10.0",
+    "webpack-dev-server": "^4.9.3"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.10.0",
+    "@emotion/styled": "^11.10.0",
+    "@mui/icons-material": "^5.10.0",
+    "@mui/material": "^5.10.0",
+    "axios": "^0.27.2",
+    "electron-squirrel-startup": "^1.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hook-form": "^7.34.0",
+    "react-query": "^3.39.2",
+    "react-router-dom": "^6.3.0",
+    "recharts": "^2.5.0"
+  },
+  "build": {
+    "appId": "com.insurance.desktop",
+    "productName": "Insurance Management System",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+} 
