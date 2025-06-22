@@ -1,9 +1,12 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import date, datetime, timedelta
 from ..db.models import Contract, Client, InsuranceProduct, ContractStatus
-from ..modules.contract import ContractCreate, ContractUpdate, PremiumCalculationParams, PremiumCalculationResult
+from ..schemas.contract import (
+    ContractCreate, ContractUpdate, PremiumCalculationParams, 
+    PremiumCalculationResult, ContractWithDetails
+)
 import secrets
 import string
 
@@ -11,14 +14,15 @@ class ContractService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_contract(self, contract_data: ContractCreate) -> Contract:
+    def create_contract(self, contract_data: ContractCreate, agent_id: int) -> Contract:
         """Create a new contract"""
         # Generate unique contract number
         contract_number = self.generate_contract_number()
         
         contract = Contract(
-            **contract_data.dict(exclude={'contract_number'}),
-            contract_number=contract_number
+            **contract_data.dict(),
+            contract_number=contract_number,
+            agent_id=agent_id
         )
         
         self.db.add(contract)
@@ -29,6 +33,26 @@ class ContractService:
     def get_contract(self, contract_id: int) -> Optional[Contract]:
         """Get contract by ID"""
         return self.db.query(Contract).filter(Contract.id == contract_id).first()
+
+    def get_contract_with_details(self, contract_id: int) -> Optional[ContractWithDetails]:
+        """Get contract with related details"""
+        contract_query = self.db.query(Contract).options(
+            joinedload(Contract.client),
+            joinedload(Contract.product)
+        ).filter(Contract.id == contract_id).first()
+        
+        if not contract_query:
+            return None
+        
+        # Create contract with details
+        contract_dict = {
+            **contract_query.__dict__,
+            "client_name": f"{contract_query.client.first_name} {contract_query.client.last_name}",
+            "product_name": contract_query.product.name,
+            "agent_name": None  # Would need to fetch from auth service
+        }
+        
+        return ContractWithDetails(**contract_dict)
 
     def get_contract_by_number(self, contract_number: str) -> Optional[Contract]:
         """Get contract by contract number"""
@@ -42,9 +66,12 @@ class ContractService:
         agent_id: Optional[int] = None,
         status: Optional[ContractStatus] = None,
         product_id: Optional[int] = None
-    ) -> tuple[List[Contract], int]:
+    ) -> Tuple[List[ContractWithDetails], int]:
         """Get list of contracts with pagination and filters"""
-        query = self.db.query(Contract)
+        query = self.db.query(Contract).options(
+            joinedload(Contract.client),
+            joinedload(Contract.product)
+        )
         
         # Apply filters
         if client_id:
@@ -62,7 +89,18 @@ class ContractService:
         total = query.count()
         contracts = query.offset(skip).limit(limit).all()
         
-        return contracts, total
+        # Convert to ContractWithDetails
+        contracts_with_details = []
+        for contract in contracts:
+            contract_dict = {
+                **contract.__dict__,
+                "client_name": f"{contract.client.first_name} {contract.client.last_name}",
+                "product_name": contract.product.name,
+                "agent_name": None  # Would need to fetch from auth service
+            }
+            contracts_with_details.append(ContractWithDetails(**contract_dict))
+        
+        return contracts_with_details, total
 
     def update_contract(self, contract_id: int, contract_data: ContractUpdate) -> Optional[Contract]:
         """Update contract"""
@@ -78,19 +116,18 @@ class ContractService:
         self.db.refresh(contract)
         return contract
 
-    def activate_contract(self, contract_id: int) -> Optional[Contract]:
+    def activate_contract(self, contract_id: int) -> bool:
         """Activate contract"""
         contract = self.get_contract(contract_id)
         if not contract:
-            return None
+            return False
         
         if contract.status != ContractStatus.DRAFT:
-            raise ValueError("Only draft contracts can be activated")
+            return False
         
         contract.status = ContractStatus.ACTIVE
         self.db.commit()
-        self.db.refresh(contract)
-        return contract
+        return True
 
     def suspend_contract(self, contract_id: int, reason: str = None) -> Optional[Contract]:
         """Suspend contract"""
@@ -102,7 +139,6 @@ class ContractService:
             raise ValueError("Only active contracts can be suspended")
         
         contract.status = ContractStatus.SUSPENDED
-        # Could add reason to terms_conditions or separate field
         self.db.commit()
         self.db.refresh(contract)
         return contract
@@ -121,114 +157,79 @@ class ContractService:
         self.db.refresh(contract)
         return contract
 
-    def check_expired_contracts(self) -> List[Contract]:
-        """Check and update expired contracts"""
-        today = date.today()
-        expired_contracts = self.db.query(Contract).filter(
-            and_(
-                Contract.end_date < today,
-                Contract.status == ContractStatus.ACTIVE
-            )
-        ).all()
-        
-        for contract in expired_contracts:
-            contract.status = ContractStatus.EXPIRED
-        
-        if expired_contracts:
-            self.db.commit()
-        
-        return expired_contracts
-
-    def calculate_premium(self, params: PremiumCalculationParams) -> PremiumCalculationResult:
-        """Calculate premium based on parameters"""
-        base_premium = params.base_premium
-        coverage_amount = params.coverage_amount
+    def calculate_premium(self, params: PremiumCalculationParams, product: InsuranceProduct) -> PremiumCalculationResult:
+        """Calculate premium based on parameters and product"""
+        base_premium = product.base_premium * (params.coverage_amount / 100000)  # Base rate per 100k coverage
         risk_factors = params.risk_factors
-        discounts = params.discounts
         
         # Risk factor calculations
         risk_multiplier = 1.0
-        risk_adjustments = {}
+        calculation_details = {
+            "product_name": product.name,
+            "base_coverage": product.coverage_amount,
+            "requested_coverage": params.coverage_amount,
+            "risk_factors_applied": {}
+        }
         
         # Age factor
-        if 'age' in risk_factors:
-            age = risk_factors['age']
+        if params.client_age:
+            age = params.client_age
             if age < 25:
                 risk_multiplier *= 1.2
-                risk_adjustments['young_driver'] = 0.2
+                calculation_details["risk_factors_applied"]["young_age"] = 0.2
             elif age > 65:
                 risk_multiplier *= 1.1
-                risk_adjustments['senior_driver'] = 0.1
+                calculation_details["risk_factors_applied"]["senior_age"] = 0.1
         
         # Coverage amount factor
-        if coverage_amount > 100000:
-            risk_multiplier *= 1.05
-            risk_adjustments['high_coverage'] = 0.05
+        if params.coverage_amount > 500000:
+            risk_multiplier *= 1.1
+            calculation_details["risk_factors_applied"]["high_coverage"] = 0.1
         
-        # Location factor
-        if 'location_risk' in risk_factors:
-            location_risk = risk_factors['location_risk']
-            if location_risk == 'high':
+        # Custom risk factors
+        for factor, value in risk_factors.items():
+            if factor == "high_risk_area" and value:
                 risk_multiplier *= 1.15
-                risk_adjustments['high_risk_location'] = 0.15
-            elif location_risk == 'low':
-                risk_multiplier *= 0.95
-                risk_adjustments['low_risk_location'] = -0.05
+                calculation_details["risk_factors_applied"]["high_risk_area"] = 0.15
+            elif factor == "previous_claims" and isinstance(value, (int, float)):
+                risk_multiplier *= (1 + value * 0.1)
+                calculation_details["risk_factors_applied"]["previous_claims"] = value * 0.1
+            elif factor == "security_systems" and value:
+                risk_multiplier *= 0.9
+                calculation_details["risk_factors_applied"]["security_systems"] = -0.1
         
-        # Apply risk adjustments
-        adjusted_premium = base_premium * risk_multiplier
-        
-        # Apply discounts
-        discount_multiplier = 1.0
-        discounts_applied = {}
-        
-        if 'loyalty_discount' in discounts:
-            discount_rate = discounts['loyalty_discount']
-            discount_multiplier *= (1 - discount_rate)
-            discounts_applied['loyalty'] = discount_rate
-        
-        if 'multi_policy_discount' in discounts:
-            discount_rate = discounts['multi_policy_discount']
-            discount_multiplier *= (1 - discount_rate)
-            discounts_applied['multi_policy'] = discount_rate
-        
-        total_premium = adjusted_premium * discount_multiplier
+        final_premium = base_premium * risk_multiplier
+        monthly_premium = final_premium / params.duration_months
         
         return PremiumCalculationResult(
-            base_premium=base_premium,
-            total_premium=total_premium,
-            risk_adjustments=risk_adjustments,
-            discounts_applied=discounts_applied,
-            calculation_details={
-                'risk_multiplier': risk_multiplier,
-                'discount_multiplier': discount_multiplier,
-                'adjusted_premium': adjusted_premium
-            }
+            base_premium=round(base_premium, 2),
+            risk_multiplier=round(risk_multiplier, 2),
+            final_premium=round(final_premium, 2),
+            monthly_premium=round(monthly_premium, 2),
+            calculation_details=calculation_details
         )
 
     def generate_contract_number(self) -> str:
         """Generate unique contract number"""
         while True:
-            # Format: CON-YYYY-XXXXXX
+            # Generate format: CON-YYYY-XXXXXX
             year = datetime.now().year
             random_part = ''.join(secrets.choice(string.digits) for _ in range(6))
             contract_number = f"CON-{year}-{random_part}"
             
             # Check if it's unique
-            existing = self.db.query(Contract).filter(
-                Contract.contract_number == contract_number
-            ).first()
-            
+            existing = self.get_contract_by_number(contract_number)
             if not existing:
                 return contract_number
 
     def get_contracts_expiring_soon(self, days: int = 30) -> List[Contract]:
         """Get contracts expiring within specified days"""
-        expiry_date = date.today() + timedelta(days=days)
+        future_date = date.today() + timedelta(days=days)
         
         return self.db.query(Contract).filter(
             and_(
-                Contract.end_date <= expiry_date,
+                Contract.end_date <= future_date,
+                Contract.end_date >= date.today(),
                 Contract.status == ContractStatus.ACTIVE
             )
         ).all()
@@ -240,18 +241,16 @@ class ContractService:
         if agent_id:
             query = query.filter(Contract.agent_id == agent_id)
         
-        contracts = query.all()
+        all_contracts = query.all()
         
         stats = {
-            "total_contracts": len(contracts),
-            "active_contracts": len([c for c in contracts if c.status == ContractStatus.ACTIVE]),
-            "draft_contracts": len([c for c in contracts if c.status == ContractStatus.DRAFT]),
-            "suspended_contracts": len([c for c in contracts if c.status == ContractStatus.SUSPENDED]),
-            "expired_contracts": len([c for c in contracts if c.status == ContractStatus.EXPIRED]),
-            "cancelled_contracts": len([c for c in contracts if c.status == ContractStatus.CANCELLED]),
-            "total_premium": sum(c.premium_amount for c in contracts),
-            "average_premium": sum(c.premium_amount for c in contracts) / len(contracts) if contracts else 0,
-            "total_coverage": sum(c.coverage_amount for c in contracts)
+            "total_contracts": len(all_contracts),
+            "active_contracts": len([c for c in all_contracts if c.status == ContractStatus.ACTIVE]),
+            "draft_contracts": len([c for c in all_contracts if c.status == ContractStatus.DRAFT]),
+            "expired_contracts": len([c for c in all_contracts if c.status == ContractStatus.EXPIRED]),
+            "cancelled_contracts": len([c for c in all_contracts if c.status == ContractStatus.CANCELLED]),
+            "total_premium_volume": sum(c.premium_amount for c in all_contracts),
+            "total_coverage_volume": sum(c.coverage_amount for c in all_contracts)
         }
         
         return stats 

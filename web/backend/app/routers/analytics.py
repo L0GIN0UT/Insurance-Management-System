@@ -1,47 +1,55 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, date
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, require_roles
+from app.db.database import get_db
+from app.schemas.reports import FinanceReportData, ActivityReportData
+from app.functions.analytics_service import AnalyticsService
 
 router = APIRouter()
 
 @router.get("/dashboard")
 async def get_dashboard_data(
-    current_user: dict = Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Get dashboard analytics data"""
-    # Managers and admins can view dashboard
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager access required for analytics"
-        )
-    
-    # TODO: Implement dashboard data logic
-    return {
-        "total_contracts": 0,
-        "active_claims": 0,
-        "pending_approvals": 0,
-        "revenue_month": 0,
-        "revenue_year": 0,
-        "recent_activity": []
-    }
+    analytics_service = AnalyticsService(db)
+    dashboard_data = analytics_service.get_dashboard_data()
+    return dashboard_data
+
+@router.get("/reports/finance", response_model=FinanceReportData)
+async def get_finance_report(
+    start_date: date = None,
+    end_date: date = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("manager", "admin"))
+):
+    """Generate financial report"""
+    analytics_service = AnalyticsService(db)
+    report = analytics_service.generate_finance_report(start_date, end_date)
+    return report
+
+@router.get("/reports/activity", response_model=ActivityReportData)
+async def get_activity_report(
+    start_date: date = None,
+    end_date: date = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("manager", "admin"))
+):
+    """Generate activity report"""
+    analytics_service = AnalyticsService(db)
+    report = analytics_service.generate_activity_report(start_date, end_date)
+    return report
 
 @router.get("/reports/contracts")
 async def get_contracts_report(
     start_date: date = None,
     end_date: date = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Generate contracts report"""
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager access required"
-        )
-    
     # TODO: Implement contracts report logic
     return {
         "report_type": "contracts",
@@ -53,16 +61,9 @@ async def get_contracts_report(
 async def get_claims_report(
     start_date: date = None,
     end_date: date = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Generate claims report"""
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager access required"
-        )
-    
     # TODO: Implement claims report logic
     return {
         "report_type": "claims",
@@ -74,16 +75,9 @@ async def get_claims_report(
 async def get_revenue_report(
     start_date: date = None,
     end_date: date = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Generate revenue report"""
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager access required"
-        )
-    
     # TODO: Implement revenue report logic
     return {
         "report_type": "revenue",
@@ -95,16 +89,9 @@ async def get_revenue_report(
 
 @router.get("/statistics/overview")
 async def get_overview_statistics(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Get overview statistics"""
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager access required"
-        )
-    
     # TODO: Implement overview statistics logic
     return {
         "clients": {"total": 0, "active": 0, "new_this_month": 0},

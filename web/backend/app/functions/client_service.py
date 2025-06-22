@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from typing import List, Optional
-from ..db.models import Client
-from ..modules.client import ClientCreate, ClientUpdate
+from typing import List, Optional, Tuple
+from ..db.models import Client, Contract, ContractStatus
+from ..schemas.client import ClientCreate, ClientUpdate
 import secrets
 import string
 
@@ -14,7 +14,8 @@ class ClientService:
         """Create a new client"""
         client = Client(
             **client_data.dict(),
-            created_by=created_by
+            created_by=created_by,
+            identification_number=self.generate_client_id()
         )
         self.db.add(client)
         self.db.commit()
@@ -35,7 +36,7 @@ class ClientService:
         limit: int = 100, 
         search: Optional[str] = None,
         created_by: Optional[int] = None
-    ) -> tuple[List[Client], int]:
+    ) -> Tuple[List[Client], int]:
         """Get list of clients with pagination and search"""
         query = self.db.query(Client)
         
@@ -77,13 +78,23 @@ class ClientService:
         if not client:
             return False
         
-        # Check if client has contracts
-        if client.contracts:
+        # Check if client has active contracts
+        if self.has_active_contracts(client_id):
             raise ValueError("Cannot delete client with active contracts")
         
         self.db.delete(client)
         self.db.commit()
         return True
+
+    def has_active_contracts(self, client_id: int) -> bool:
+        """Check if client has active contracts"""
+        active_contracts = self.db.query(Contract).filter(
+            and_(
+                Contract.client_id == client_id,
+                Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.DRAFT])
+            )
+        ).count()
+        return active_contracts > 0
 
     def search_clients(self, query: str, limit: int = 10) -> List[Client]:
         """Search clients by name, email or phone"""
@@ -118,7 +129,7 @@ class ClientService:
         
         stats = {
             "total_contracts": len(client.contracts),
-            "active_contracts": len([c for c in client.contracts if c.status == "active"]),
+            "active_contracts": len([c for c in client.contracts if c.status == ContractStatus.ACTIVE]),
             "total_premium": sum(c.premium_amount for c in client.contracts),
             "total_claims": sum(len(c.claims) for c in client.contracts),
             "total_claimed_amount": sum(

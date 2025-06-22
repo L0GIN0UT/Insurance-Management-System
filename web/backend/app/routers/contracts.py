@@ -1,98 +1,158 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 from typing import List
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, require_roles
+from app.db.database import get_db
+from app.db.models import Contract, Client, InsuranceProduct
+from app.schemas.contract import (
+    ContractCreate, ContractUpdate, Contract as ContractSchema, 
+    ContractList, PremiumCalculationParams, PremiumCalculationResult,
+    ContractWithDetails
+)
+from app.functions.contract_service import ContractService
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("/", response_model=ContractList)
 async def get_contracts(
     skip: int = 0,
     limit: int = 100,
     client_id: int = None,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """Get list of contracts"""
-    # TODO: Implement database logic
-    return {
-        "contracts": [],
-        "total": 0,
-        "skip": skip,
-        "limit": limit,
-        "filters": {"client_id": client_id}
-    }
+    contract_service = ContractService(db)
+    contracts, total = contract_service.get_contracts(
+        skip=skip, 
+        limit=limit, 
+        client_id=client_id
+    )
+    
+    return ContractList(
+        contracts=contracts,
+        total=total,
+        skip=skip,
+        limit=limit
+    )
 
-@router.post("/")
-async def create_contract(
-    # contract_data: ContractCreate,
-    current_user: dict = Depends(get_current_user)
+@router.post("/calculate", response_model=PremiumCalculationResult)
+async def calculate_premium(
+    calculation_params: PremiumCalculationParams,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("agent", "operator"))
 ):
-    """Create new insurance contract"""
-    # Only agents and managers can create contracts
-    allowed_roles = ["agent", "manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
+    """Calculate insurance premium"""
+    contract_service = ContractService(db)
+    
+    # Verify product exists
+    product = db.query(InsuranceProduct).filter(
+        InsuranceProduct.id == calculation_params.product_id
+    ).first()
+    
+    if not product:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only agents and managers can create contracts"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Insurance product not found"
         )
     
-    # TODO: Implement contract creation logic
-    return {"message": "Contract created successfully"}
+    result = contract_service.calculate_premium(calculation_params, product)
+    return result
 
-@router.get("/{contract_id}")
+@router.post("/", response_model=ContractSchema)
+async def create_contract(
+    contract_data: ContractCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("agent", "operator"))
+):
+    """Create new insurance contract"""
+    contract_service = ContractService(db)
+    
+    # Verify client exists
+    client = db.query(Client).filter(Client.id == contract_data.client_id).first()
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client not found"
+        )
+    
+    # Verify product exists
+    product = db.query(InsuranceProduct).filter(
+        InsuranceProduct.id == contract_data.product_id
+    ).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Insurance product not found"
+        )
+    
+    contract = contract_service.create_contract(
+        contract_data, 
+        agent_id=current_user.get("user_id")
+    )
+    return contract
+
+@router.get("/{contract_id}", response_model=ContractWithDetails)
 async def get_contract(
     contract_id: int,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """Get contract by ID"""
-    # TODO: Implement get contract logic
-    return {"contract_id": contract_id, "data": {}}
+    contract_service = ContractService(db)
+    contract = contract_service.get_contract_with_details(contract_id)
+    
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contract not found"
+        )
+    
+    return contract
 
-@router.put("/{contract_id}")
+@router.put("/{contract_id}", response_model=ContractSchema)
 async def update_contract(
     contract_id: int,
-    # contract_data: ContractUpdate,
-    current_user: dict = Depends(get_current_user)
+    contract_data: ContractUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("agent", "manager", "admin"))
 ):
     """Update contract information"""
-    allowed_roles = ["agent", "manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
+    contract_service = ContractService(db)
+    
+    # Check if contract exists
+    existing_contract = contract_service.get_contract(contract_id)
+    if not existing_contract:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contract not found"
         )
     
-    # TODO: Implement contract update logic
-    return {"message": "Contract updated successfully"}
-
-@router.post("/{contract_id}/calculate-premium")
-async def calculate_premium(
-    contract_id: int,
-    # calculation_params: PremiumCalculationParams,
-    current_user: dict = Depends(get_current_user)
-):
-    """Calculate insurance premium for contract"""
-    allowed_roles = ["agent", "manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions"
-        )
-    
-    # TODO: Implement premium calculation logic
-    return {"premium": 0, "calculation_details": {}}
+    contract = contract_service.update_contract(contract_id, contract_data)
+    return contract
 
 @router.post("/{contract_id}/activate")
 async def activate_contract(
     contract_id: int,
-    current_user: dict = Depends(get_current_user)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("manager", "admin"))
 ):
     """Activate insurance contract"""
-    allowed_roles = ["manager", "admin"]
-    if current_user.get("role") not in allowed_roles:
+    contract_service = ContractService(db)
+    
+    # Check if contract exists
+    existing_contract = contract_service.get_contract(contract_id)
+    if not existing_contract:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers can activate contracts"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contract not found"
         )
     
-    # TODO: Implement contract activation logic
+    success = contract_service.activate_contract(contract_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot activate contract in current state"
+        )
+    
     return {"message": "Contract activated successfully"} 
