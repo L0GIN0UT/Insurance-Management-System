@@ -19,14 +19,14 @@ class ClaimBase(BaseModel):
     contract_id: int
     incident_date: date
     description: str
-    claimed_amount: Optional[float] = None
+    claim_amount: Optional[float] = None
 
 class ClaimCreate(ClaimBase):
     pass
 
 class ClaimUpdate(BaseModel):
     description: Optional[str] = None
-    claimed_amount: Optional[float] = None
+    claim_amount: Optional[float] = None
     status: Optional[ClaimStatus] = None
     adjuster_notes: Optional[str] = None
 

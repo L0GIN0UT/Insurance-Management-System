@@ -86,7 +86,7 @@ class AnalyticsService:
         
         # Calculate metrics
         total_claims = len(claims)
-        total_claimed_amount = sum(c.claimed_amount or 0 for c in claims)
+        total_claimed_amount = sum(c.claim_amount or 0 for c in claims)
         total_approved_amount = sum(c.approved_amount or 0 for c in claims if c.approved_amount)
         average_claim_amount = total_claimed_amount / total_claims if total_claims > 0 else 0
         
@@ -105,12 +105,12 @@ class AnalyticsService:
                 adjuster_id = claim.adjuster_id
                 if adjuster_id in adjuster_claims:
                     adjuster_claims[adjuster_id]['count'] += 1
-                    adjuster_claims[adjuster_id]['total_amount'] += claim.claimed_amount or 0
+                    adjuster_claims[adjuster_id]['total_amount'] += claim.claim_amount or 0
                 else:
                     adjuster_claims[adjuster_id] = {
                         'adjuster_id': adjuster_id,
                         'count': 1,
-                        'total_amount': claim.claimed_amount or 0
+                        'total_amount': claim.claim_amount or 0
                     }
         
         claims_by_adjuster = list(adjuster_claims.values())

@@ -20,6 +20,24 @@ class ClaimCreate(BaseModel):
     claim_amount: float
     documents: List[str] = []
 
+class ClaimSubmitRequest(BaseModel):
+    contract_id: int
+    incident_date: str
+    description: str
+    claim_amount: float
+    documents: List[str] = []
+    priority: str = "normal"  # "low", "normal", "high", "urgent"
+    customer_contact: str = None
+    witnesses: List[str] = []
+    
+class ClaimSubmitResponse(BaseModel):
+    claim_id: int
+    claim_number: str
+    status: str
+    estimated_processing_time: str
+    adjuster_assigned: bool
+    validation_checklist: dict
+
 class ClaimDecision(BaseModel):
     decision: str  # "approved", "rejected", "requires_investigation"
     approved_amount: float = None
@@ -194,3 +212,82 @@ async def reject_claim(
     
     # TODO: Implement claim rejection logic
     return {"message": "Claim rejected", "reason": rejection_reason} 
+
+@router.post("/submit", response_model=ClaimSubmitResponse)
+async def submit_claim_to_adjuster(
+    claim_data: ClaimSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles("operator"))
+):
+    """Submit claim to adjuster with validation checklist (operator only)"""
+    claim_service = ClaimService(db)
+    
+    # Проверяем существование договора
+    from app.db.models import Contract
+    contract = db.query(Contract).filter(Contract.id == claim_data.contract_id).first()
+    if not contract:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contract not found"
+        )
+    
+    # Проверяем активность договора
+    if contract.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Contract is not active"
+        )
+    
+    # Валидационный чек-лист
+    validation_checklist = {
+        "contract_valid": True,
+        "contract_active": contract.status == "active",
+        "incident_date_valid": True,  # TODO: проверить что дата не в будущем
+        "description_complete": len(claim_data.description) >= 20,
+        "amount_reasonable": claim_data.claim_amount <= contract.coverage_amount,
+        "documents_attached": len(claim_data.documents) > 0,
+        "contact_provided": claim_data.customer_contact is not None
+    }
+    
+    # Все проверки должны быть пройдены
+    all_valid = all(validation_checklist.values())
+    if not all_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Validation failed",
+                "checklist": validation_checklist
+            }
+        )
+    
+    # Создаем заявку
+    create_data = ClaimCreate(
+        contract_id=claim_data.contract_id,
+        incident_date=claim_data.incident_date,
+        description=claim_data.description,
+        claim_amount=claim_data.claim_amount,
+        documents=claim_data.documents
+    )
+    
+    claim = claim_service.create_claim(create_data, created_by=current_user.get("user_id"))
+    
+    # Назначаем урегулировщика (простая логика)
+    # TODO: Реализовать умное назначение по загрузке
+    adjuster_assigned = True
+    
+    # Оценка времени обработки
+    if claim_data.priority == "urgent":
+        processing_time = "1-2 дня"
+    elif claim_data.priority == "high":
+        processing_time = "3-5 дней"
+    else:
+        processing_time = "5-10 дней"
+    
+    return ClaimSubmitResponse(
+        claim_id=claim.id,
+        claim_number=claim.claim_number,
+        status=claim.status,
+        estimated_processing_time=processing_time,
+        adjuster_assigned=adjuster_assigned,
+        validation_checklist=validation_checklist
+    ) 

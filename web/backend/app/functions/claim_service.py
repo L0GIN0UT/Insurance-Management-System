@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
-from typing import List, Optional
-from datetime import date, datetime
-from ..db.models import Claim, Contract, ClaimStatus
-from ..modules.claim import ClaimCreate, ClaimUpdate, ClaimProcessingData, ClaimApproval, ClaimRejection
+from sqlalchemy import or_, and_, func
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date
+from app.db.models import Claim, Contract, ClaimStatus
+from app.schemas.claim import ClaimCreate, ClaimUpdate, ClaimDecisionRequest, ClaimWithDetails
 import secrets
 import string
 
@@ -11,18 +11,19 @@ class ClaimService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_claim(self, claim_data: ClaimCreate) -> Claim:
-        """Create a new claim"""
-        # Generate unique claim number
+    def create_claim(self, claim_data: ClaimCreate, created_by: Optional[int] = None) -> Claim:
+        """Create new claim"""
         claim_number = self.generate_claim_number()
         
-        # Set reported date to today if not provided
-        reported_date = claim_data.reported_date or date.today()
-        
         claim = Claim(
-            **claim_data.dict(exclude={'claim_number', 'reported_date'}),
             claim_number=claim_number,
-            reported_date=reported_date
+            contract_id=claim_data.contract_id,
+            incident_date=claim_data.incident_date,
+            description=claim_data.description,
+            claim_amount=claim_data.claim_amount,
+            status=ClaimStatus.SUBMITTED,
+            reported_date=date.today(),
+            created_at=datetime.now()
         )
         
         self.db.add(claim)
@@ -45,10 +46,18 @@ class ClaimService:
         contract_id: Optional[int] = None,
         adjuster_id: Optional[int] = None,
         status: Optional[ClaimStatus] = None,
-        search: Optional[str] = None
-    ) -> tuple[List[Claim], int]:
+        search: Optional[str] = None,
+        status_filter: Optional[str] = None
+    ) -> tuple[List[ClaimWithDetails], int]:
         """Get list of claims with pagination and filters"""
-        query = self.db.query(Claim)
+        from app.db.models import Client, Contract
+        
+        query = self.db.query(
+            Claim,
+            Contract.contract_number,
+            (Client.first_name + ' ' + Client.last_name).label('client_name')
+        ).join(Contract, Claim.contract_id == Contract.id)\
+         .join(Client, Contract.client_id == Client.id)
         
         # Apply filters
         if contract_id:
@@ -59,6 +68,9 @@ class ClaimService:
         
         if status:
             query = query.filter(Claim.status == status)
+            
+        if status_filter:
+            query = query.filter(Claim.status == status_filter)
         
         if search:
             search_filter = or_(
@@ -68,9 +80,142 @@ class ClaimService:
             query = query.filter(search_filter)
         
         total = query.count()
-        claims = query.offset(skip).limit(limit).all()
+        results = query.offset(skip).limit(limit).all()
         
-        return claims, total
+        # Convert to ClaimWithDetails
+        claims_with_details = []
+        for claim, contract_number, client_name in results:
+            claim_dict = {
+                "id": claim.id,
+                "claim_number": claim.claim_number,
+                "contract_id": claim.contract_id,
+                "incident_date": claim.incident_date,
+                "reported_date": claim.reported_date,
+                "description": claim.description,
+                "claim_amount": claim.claim_amount,
+                "approved_amount": claim.approved_amount,
+                "status": claim.status,
+                "adjuster_id": claim.adjuster_id,
+                "adjuster_notes": claim.adjuster_notes,
+                "created_at": claim.created_at,
+                "updated_at": claim.updated_at,
+                "contract_number": contract_number,
+                "client_name": client_name,
+                "adjuster_name": f"Урегулировщик {claim.adjuster_id}" if claim.adjuster_id else None
+            }
+            claims_with_details.append(ClaimWithDetails(**claim_dict))
+        
+        return claims_with_details, total
+
+    def get_claim_with_details(self, claim_id: int) -> Optional[ClaimWithDetails]:
+        """Get claim with full details"""
+        from app.db.models import Client, Contract
+        
+        result = self.db.query(
+            Claim,
+            Contract.contract_number,
+            (Client.first_name + ' ' + Client.last_name).label('client_name')
+        ).join(Contract, Claim.contract_id == Contract.id)\
+         .join(Client, Contract.client_id == Client.id)\
+         .filter(Claim.id == claim_id).first()
+        
+        if not result:
+            return None
+            
+        claim, contract_number, client_name = result
+        
+        return ClaimWithDetails(
+            id=claim.id,
+            claim_number=claim.claim_number,
+            contract_id=claim.contract_id,
+            incident_date=claim.incident_date,
+            reported_date=claim.reported_date,
+            description=claim.description,
+            claim_amount=claim.claim_amount,
+            approved_amount=claim.approved_amount,
+            status=claim.status,
+            adjuster_id=claim.adjuster_id,
+            adjuster_notes=claim.adjuster_notes,
+            created_at=claim.created_at,
+            updated_at=claim.updated_at,
+            contract_number=contract_number,
+            client_name=client_name,
+            adjuster_name=f"Урегулировщик {claim.adjuster_id}" if claim.adjuster_id else None
+        )
+
+    def get_pending_claims(self, skip: int = 0, limit: int = 100, adjuster_id: Optional[int] = None) -> tuple[List[ClaimWithDetails], int]:
+        """Get pending claims for adjustment"""
+        from app.db.models import Client, Contract
+        
+        query = self.db.query(
+            Claim,
+            Contract.contract_number,
+            (Client.first_name + ' ' + Client.last_name).label('client_name')
+        ).join(Contract, Claim.contract_id == Contract.id)\
+         .join(Client, Contract.client_id == Client.id)\
+         .filter(Claim.status.in_([ClaimStatus.SUBMITTED, ClaimStatus.UNDER_REVIEW]))
+        
+        if adjuster_id:
+            query = query.filter(Claim.adjuster_id == adjuster_id)
+        
+        total = query.count()
+        results = query.offset(skip).limit(limit).all()
+        
+        # Convert to ClaimWithDetails
+        pending_claims = []
+        for claim, contract_number, client_name in results:
+            claim_dict = {
+                "id": claim.id,
+                "claim_number": claim.claim_number,
+                "contract_id": claim.contract_id,
+                "incident_date": claim.incident_date,
+                "reported_date": claim.reported_date,
+                "description": claim.description,
+                "claim_amount": claim.claim_amount,
+                "approved_amount": claim.approved_amount,
+                "status": claim.status,
+                "adjuster_id": claim.adjuster_id,
+                "adjuster_notes": claim.adjuster_notes,
+                "created_at": claim.created_at,
+                "updated_at": claim.updated_at,
+                "contract_number": contract_number,
+                "client_name": client_name,
+                "adjuster_name": f"Урегулировщик {claim.adjuster_id}" if claim.adjuster_id else None
+            }
+            pending_claims.append(ClaimWithDetails(**claim_dict))
+        
+        return pending_claims, total
+
+    def make_decision(self, claim_id: int, decision_data: ClaimDecisionRequest, adjuster_id: int) -> Optional[Claim]:
+        """Make decision on claim (adjuster only)"""
+        claim = self.get_claim(claim_id)
+        if not claim:
+            return None
+        
+        # Update claim based on decision
+        if decision_data.decision == "approved":
+            claim.status = ClaimStatus.APPROVED
+            claim.approved_amount = decision_data.approved_amount or claim.claim_amount
+        elif decision_data.decision == "rejected":
+            claim.status = ClaimStatus.REJECTED
+            claim.approved_amount = 0
+        else:  # requires_investigation
+            claim.status = ClaimStatus.UNDER_REVIEW
+        
+        # Update notes
+        decision_note = f"Решение: {decision_data.decision}"
+        if decision_data.notes:
+            decision_note += f" - {decision_data.notes}"
+        if decision_data.rejection_reason:
+            decision_note += f" (Причина отказа: {decision_data.rejection_reason})"
+            
+        claim.adjuster_notes = (claim.adjuster_notes or "") + f"\n{decision_note}"
+        claim.adjuster_id = adjuster_id
+        claim.updated_at = datetime.now()
+        
+        self.db.commit()
+        self.db.refresh(claim)
+        return claim
 
     def update_claim(self, claim_id: int, claim_data: ClaimUpdate) -> Optional[Claim]:
         """Update claim"""
@@ -82,6 +227,7 @@ class ClaimService:
         for field, value in update_data.items():
             setattr(claim, field, value)
         
+        claim.updated_at = datetime.now()
         self.db.commit()
         self.db.refresh(claim)
         return claim
@@ -97,70 +243,6 @@ class ClaimService:
         
         claim.adjuster_id = adjuster_id
         claim.status = ClaimStatus.UNDER_REVIEW
-        
-        self.db.commit()
-        self.db.refresh(claim)
-        return claim
-
-    def process_claim(self, claim_id: int, processing_data: ClaimProcessingData) -> Optional[Claim]:
-        """Process claim with adjuster decision"""
-        claim = self.get_claim(claim_id)
-        if not claim:
-            return None
-        
-        if claim.status not in [ClaimStatus.SUBMITTED, ClaimStatus.UNDER_REVIEW]:
-            raise ValueError("Claim is not in a processable status")
-        
-        claim.adjuster_notes = processing_data.adjuster_notes
-        claim.approved_amount = processing_data.approved_amount
-        claim.status = processing_data.status
-        
-        self.db.commit()
-        self.db.refresh(claim)
-        return claim
-
-    def approve_claim(self, claim_id: int, approval_data: ClaimApproval) -> Optional[Claim]:
-        """Approve claim"""
-        claim = self.get_claim(claim_id)
-        if not claim:
-            return None
-        
-        if claim.status != ClaimStatus.UNDER_REVIEW:
-            raise ValueError("Only claims under review can be approved")
-        
-        # Validate approved amount doesn't exceed claimed amount
-        if claim.claimed_amount and approval_data.approved_amount > claim.claimed_amount:
-            raise ValueError("Approved amount cannot exceed claimed amount")
-        
-        # Validate approved amount doesn't exceed contract coverage
-        if claim.contract and approval_data.approved_amount > claim.contract.coverage_amount:
-            raise ValueError("Approved amount cannot exceed contract coverage")
-        
-        claim.approved_amount = approval_data.approved_amount
-        claim.status = ClaimStatus.APPROVED
-        if approval_data.approval_notes:
-            claim.adjuster_notes = (claim.adjuster_notes or "") + f"\nApproval: {approval_data.approval_notes}"
-        
-        self.db.commit()
-        self.db.refresh(claim)
-        return claim
-
-    def reject_claim(self, claim_id: int, rejection_data: ClaimRejection) -> Optional[Claim]:
-        """Reject claim"""
-        claim = self.get_claim(claim_id)
-        if not claim:
-            return None
-        
-        if claim.status != ClaimStatus.UNDER_REVIEW:
-            raise ValueError("Only claims under review can be rejected")
-        
-        claim.status = ClaimStatus.REJECTED
-        claim.approved_amount = 0
-        rejection_note = f"REJECTED: {rejection_data.rejection_reason}"
-        if rejection_data.rejection_notes:
-            rejection_note += f"\nNotes: {rejection_data.rejection_notes}"
-        
-        claim.adjuster_notes = (claim.adjuster_notes or "") + f"\n{rejection_note}"
         
         self.db.commit()
         self.db.refresh(claim)
@@ -197,17 +279,6 @@ class ClaimService:
             if not existing:
                 return claim_number
 
-    def get_pending_claims(self, adjuster_id: Optional[int] = None) -> List[Claim]:
-        """Get pending claims (submitted or under review)"""
-        query = self.db.query(Claim).filter(
-            Claim.status.in_([ClaimStatus.SUBMITTED, ClaimStatus.UNDER_REVIEW])
-        )
-        
-        if adjuster_id:
-            query = query.filter(Claim.adjuster_id == adjuster_id)
-        
-        return query.all()
-
     def get_claim_statistics(self, adjuster_id: Optional[int] = None, contract_id: Optional[int] = None) -> dict:
         """Get claim statistics"""
         query = self.db.query(Claim)
@@ -228,7 +299,7 @@ class ClaimService:
         rejected_claims = len([c for c in claims if c.status == ClaimStatus.REJECTED])
         paid_claims = len([c for c in claims if c.status == ClaimStatus.PAID])
         
-        total_claimed = sum(c.claimed_amount or 0 for c in claims)
+        total_claimed = sum(c.claim_amount or 0 for c in claims)
         total_approved = sum(c.approved_amount or 0 for c in claims if c.approved_amount)
         
         stats = {
@@ -238,7 +309,7 @@ class ClaimService:
             "approved_claims": approved_claims,
             "rejected_claims": rejected_claims,
             "paid_claims": paid_claims,
-            "total_claimed_amount": total_claimed,
+            "total_claim_amount": total_claimed,
             "total_approved_amount": total_approved,
             "average_claim_amount": total_claimed / total_claims if total_claims > 0 else 0,
             "approval_rate": approved_claims / total_claims if total_claims > 0 else 0,

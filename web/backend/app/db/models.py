@@ -90,7 +90,7 @@ class Claim(Base):
     incident_date = Column(Date, nullable=False)
     reported_date = Column(Date, server_default=func.current_date())
     description = Column(Text, nullable=False)
-    claimed_amount = Column(Float)
+    claim_amount = Column(Float)
     approved_amount = Column(Float)
     status = Column(Enum(ClaimStatus), default=ClaimStatus.SUBMITTED)
     adjuster_id = Column(Integer)  # Reference to user from auth service

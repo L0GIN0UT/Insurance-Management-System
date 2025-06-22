@@ -137,8 +137,8 @@ class ClientService:
             "active_contracts": len([c for c in client.contracts if c.status == ContractStatus.ACTIVE]),
             "total_premium": sum(c.premium_amount for c in client.contracts),
             "total_claims": sum(len(c.claims) for c in client.contracts),
-            "total_claimed_amount": sum(
-                sum(claim.claimed_amount or 0 for claim in contract.claims) 
+            "total_claim_amount": sum(
+                sum(claim.claim_amount or 0 for claim in contract.claims)
                 for contract in client.contracts
             )
         }

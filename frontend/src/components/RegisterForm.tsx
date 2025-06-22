@@ -17,7 +17,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onRegister }) => {
     password: '',
     confirmPassword: '',
     full_name: '',
-    role: 'client'
+    role: 'agent'
   });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -78,7 +78,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onRegister }) => {
         password: '',
         confirmPassword: '',
         full_name: '',
-        role: 'client'
+        role: 'agent'
       });
     } catch (error: any) {
       setError(error.message || 'Ошибка регистрации');
@@ -137,9 +137,11 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onRegister }) => {
           onChange={handleChange}
           disabled={loading}
         >
-          <option value="client">Клиент</option>
           <option value="agent">Агент</option>
+          <option value="adjuster">Урегулировщик</option>
+          <option value="operator">Оператор</option>
           <option value="manager">Менеджер</option>
+          <option value="admin">Администратор</option>
         </select>
       </div>
 
